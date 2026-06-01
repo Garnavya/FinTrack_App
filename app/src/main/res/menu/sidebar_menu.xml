@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <group android:checkableBehavior="single">
+        <item android:id="@+id/nav_dashboard" android:title="Dashboard" />
+        <item android:id="@+id/nav_charts" android:title="Analytics &amp; Charts" />
+        <item android:id="@+id/nav_reports" android:title="Financial Reports" />
+        <item android:id="@+id/nav_subscriptions" android:title="Recurring Subscriptions" />
+        <item android:id="@+id/nav_pdf" android:title="PDF Builder" />
+    </group>
+</menu>
