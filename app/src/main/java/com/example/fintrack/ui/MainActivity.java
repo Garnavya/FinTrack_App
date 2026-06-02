@@ -17,6 +17,7 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import com.example.fintrack.R;
 import com.example.fintrack.database.AppDatabase;
 import com.example.fintrack.database.Transaction;
@@ -29,6 +30,7 @@ public class MainActivity extends AppCompatActivity {
     private TransactionAdapter adapter;
     private SharedPreferences prefs;
     private double currentComputedBalance = 0.0;
+    private SwipeRefreshLayout swipeRefreshLayout;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -43,37 +45,44 @@ public class MainActivity extends AppCompatActivity {
         adapter = new TransactionAdapter();
         recyclerView.setAdapter(adapter);
 
-        // Bind Vault Text Button to Secure Modal Display
+        // Bind Pull-to-Refresh
+        swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout);
+        swipeRefreshLayout.setOnRefreshListener(this::checkPermissionsAndSync);
+
         TextView btnShowBalance = findViewById(R.id.btnShowBalance);
         btnShowBalance.setOnClickListener(v -> showBalanceVaultModal());
+
+        Button fetchButton = findViewById(R.id.btnFetchDetails);
+        fetchButton.setOnClickListener(v -> checkPermissionsAndSync());
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_SMS}, 101);
         } else {
             executeSmartSync();
         }
-
-        Button fetchButton = findViewById(R.id.btnFetchDetails);
-        fetchButton.setOnClickListener(v -> executeSmartSync());
-
         recalculateLedgerBalance();
+    }
+
+    private void checkPermissionsAndSync() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+            swipeRefreshLayout.setRefreshing(false);
+            Toast.makeText(this, "SMS Permission is strictly required to scan.", Toast.LENGTH_LONG).show();
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_SMS}, 101);
+        } else {
+            executeSmartSync();
+        }
     }
 
     private void showBalanceVaultModal() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Secure Vault Status");
-
-        // Show current total formatted balance clearly inside message window
         String balanceStr = String.format("Current Available Balance:\n\n₹ %,.2f", currentComputedBalance);
         builder.setMessage(balanceStr);
-
         builder.setPositiveButton("Close", (dialog, id) -> dialog.dismiss());
-
         builder.setNeutralButton("Edit Balance", (dialog, id) -> {
             dialog.dismiss();
-            showBalanceCalibrationDialog(); // Direct route to calibrate
+            showBalanceCalibrationDialog();
         });
-
         builder.show();
     }
 
@@ -123,7 +132,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void executeSmartSync() {
-        Toast.makeText(this, "Scanning for financial records...", Toast.LENGTH_SHORT).show();
+        if (!swipeRefreshLayout.isRefreshing()) {
+            Toast.makeText(this, "Scanning for financial records...", Toast.LENGTH_SHORT).show();
+        }
+
         new Thread(() -> {
             List<Transaction> discovered = SmsScanner.runAutoDiscovery(this);
             runOnUiThread(() -> {
@@ -138,6 +150,10 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> {
                         adapter.setTransactions(finalTxns);
                         recalculateLedgerBalance();
+                        // Turn off the spinning loading circle!
+                        if (swipeRefreshLayout.isRefreshing()) {
+                            swipeRefreshLayout.setRefreshing(false);
+                        }
                     });
                 }).start();
             });
