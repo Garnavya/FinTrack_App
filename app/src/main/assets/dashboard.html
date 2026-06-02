@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <style>
+        body { background-color: #121212; color: #ffffff; font-family: sans-serif; margin: 0; padding: 16px; padding-bottom: 40px; }
+
+        .header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        select { background: #1E1E1E; color: #BB86FC; border: 1px solid #BB86FC; padding: 8px 12px; border-radius: 8px; font-weight: bold; outline: none; }
+
+        .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+        .summary-card { background: #1E1E1E; padding: 12px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); display: flex; flex-direction: column; justify-content: center; }
+        .stat-title { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .stat-val { font-weight: bold; font-size: 18px; }
+        .val-in { color: #4CAF50; }
+        .val-out { color: #FF5252; }
+        .val-neutral { color: #E0E0E0; }
+        .val-warn { color: #FFCA28; }
+
+        .chart-container { position: relative; height: 30vh; width: 100%; margin-bottom: 24px; background: #1A1A1A; border-radius: 16px; padding: 12px; box-sizing: border-box; }
+        h3 { color: #E0E0E0; margin-bottom: 12px; font-size: 15px; font-weight: 500; border-bottom: 1px solid #333; padding-bottom: 6px;}
+    </style>
+</head>
+<body>
+
+<div class="header-row">
+    <h2 style="margin:0; color:#BB86FC; font-size: 22px;" id="dashTitle">Insights</h2>
+    <select id="monthFilter" onchange="applyFilter()"></select>
+</div>
+
+<div class="summary-grid">
+    <div class="summary-card">
+        <span class="stat-title">Total In</span>
+        <span id="totIn" class="stat-val val-in">₹0</span>
+    </div>
+    <div class="summary-card">
+        <span class="stat-title">Total Out</span>
+        <span id="totOut" class="stat-val val-out">₹0</span>
+    </div>
+    <div class="summary-card">
+        <span class="stat-title">Avg Spend / Txn</span>
+        <span id="avgSpend" class="stat-val val-neutral">₹0</span>
+    </div>
+    <div class="summary-card">
+        <span class="stat-title">Largest Expense</span>
+        <span id="maxSpend" class="stat-val val-warn">₹0</span>
+    </div>
+</div>
+
+<h3 class="chart-title">Ghost Pacing & Burn Rate</h3>
+<div class="chart-container">
+    <canvas id="pacingChart"></canvas>
+</div>
+
+<h3 class="chart-title">Transaction Size Breakdown</h3>
+<div class="chart-container">
+    <canvas id="sizeChart"></canvas>
+</div>
+
+<h3 class="chart-title">Income vs Expenses</h3>
+<div class="chart-container" style="height: 25vh;">
+    <canvas id="flowChart"></canvas>
+</div>
+
+<script>
+    let flowChart = null;
+    let sizeChart = null;
+    let pacingChart = null;
+    let allData = [];
+    let uniqueMonths = [];
+
+    Chart.defaults.color = '#888';
+    Chart.defaults.font.family = 'sans-serif';
+    Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(30, 30, 30, 0.9)';
+    Chart.defaults.plugins.tooltip.titleColor = '#BB86FC';
+
+    function initData(jsonData) {
+        allData = jsonData;
+        uniqueMonths = [...new Set(allData.map(d => d.month))];
+        const select = document.getElementById('monthFilter');
+
+        uniqueMonths.forEach(m => select.innerHTML += `<option value="${m}">${m}</option>`);
+        if(uniqueMonths.length > 0) select.value = uniqueMonths[0];
+
+        applyFilter(true); // pass true to trigger initial GSAP load
+    }
+
+    function applyFilter(isInitialLoad = false) {
+        const selected = document.getElementById('monthFilter').value;
+        let currentData = allData.filter(d => d.month === selected).slice().reverse();
+
+        // Find previous month for the "Ghost" data
+        let prevMonthData = [];
+        let currentIndex = uniqueMonths.indexOf(selected);
+        if(currentIndex < uniqueMonths.length - 1) {
+            let prevMonthName = uniqueMonths[currentIndex + 1];
+            prevMonthData = allData.filter(d => d.month === prevMonthName).slice().reverse();
+        }
+
+        let totalIn = 0, totalOut = 0, maxExpense = 0, debitCount = 0;
+        let sizeBuckets = [0, 0, 0, 0, 0];
+
+        // For Pacing Tracker (Days 1 to 30)
+        let currentCumulative = [];
+        let ghostCumulative = [];
+        let labels30 = Array.from({length: 30}, (_, i) => `Day ${i + 1}`);
+
+        let runningTotal = 0;
+        let dailySpends = new Array(30).fill(0);
+
+        currentData.forEach(t => {
+            if(t.type === 'credit') {
+                totalIn += t.amount;
+            } else {
+                totalOut += t.amount;
+                debitCount++;
+                if (t.amount > maxExpense) maxExpense = t.amount;
+
+                if (t.amount <= 100) sizeBuckets[0]++;
+                else if (t.amount <= 500) sizeBuckets[1]++;
+                else if (t.amount <= 1000) sizeBuckets[2]++;
+                else if (t.amount <= 5000) sizeBuckets[3]++;
+                else sizeBuckets[4]++;
+
+                // Extract day integer from "dd MMM" string
+                let dayInt = parseInt(t.date.split(' ')[0]) - 1;
+                if(dayInt >= 0 && dayInt < 30) dailySpends[dayInt] += t.amount;
+            }
+        });
+
+        // Calculate Cumulative Trajectory for Current Month
+        let lastDayWithData = 0;
+        for(let i = 0; i < 30; i++) {
+            runningTotal += dailySpends[i];
+            if(runningTotal > 0 || i === 0) {
+                currentCumulative.push(runningTotal);
+                lastDayWithData = i;
+            } else {
+                currentCumulative.push(null);
+            }
+        }
+
+        // Calculate Ghost Trajectory (Previous Month)
+        let prevRunning = 0;
+        let prevDaily = new Array(30).fill(0);
+        prevMonthData.forEach(t => {
+            if(t.type === 'debit') {
+                let dayInt = parseInt(t.date.split(' ')[0]) - 1;
+                if(dayInt >= 0 && dayInt < 30) prevDaily[dayInt] += t.amount;
+            }
+        });
+        for(let i = 0; i < 30; i++) {
+            prevRunning += prevDaily[i];
+            ghostCumulative.push(prevRunning);
+        }
+
+        // Runway Predictor: Extrapolate to end of month
+        let projectedRunway = new Array(30).fill(null);
+        if(lastDayWithData > 0 && lastDayWithData < 29) {
+            let avgDailyBurn = currentCumulative[lastDayWithData] / (lastDayWithData + 1);
+            projectedRunway[lastDayWithData] = currentCumulative[lastDayWithData]; // Connect the dot
+            for(let i = lastDayWithData + 1; i < 30; i++) {
+                projectedRunway[i] = projectedRunway[i-1] + avgDailyBurn;
+            }
+        }
+
+        // Update Cards
+        let avgExpense = debitCount > 0 ? (totalOut / debitCount) : 0;
+        document.getElementById('totIn').innerText = '₹' + totalIn.toLocaleString('en-IN', {maximumFractionDigits: 0});
+        document.getElementById('totOut').innerText = '₹' + totalOut.toLocaleString('en-IN', {maximumFractionDigits: 0});
+        document.getElementById('avgSpend').innerText = '₹' + avgExpense.toLocaleString('en-IN', {maximumFractionDigits: 0});
+        document.getElementById('maxSpend').innerText = '₹' + maxExpense.toLocaleString('en-IN', {maximumFractionDigits: 0});
+
+        renderCharts(totalIn, totalOut, labels30, currentCumulative, ghostCumulative, projectedRunway, sizeBuckets);
+
+        // --- THE GSAP MAGIC ---
+        // Animate DOM elements cascading into place
+        gsap.fromTo(".summary-card",
+            { y: 20, opacity: 0 },
+            { y: 0, opacity: 1, duration: 0.5, stagger: 0.1, ease: "back.out(1.7)" }
+        );
+
+        if(isInitialLoad) {
+            gsap.fromTo(".chart-container",
+                { scale: 0.95, opacity: 0 },
+                { scale: 1, opacity: 1, duration: 0.6, stagger: 0.15, ease: "power2.out", delay: 0.2 }
+            );
+            gsap.fromTo(".chart-title",
+                { x: -10, opacity: 0 },
+                { x: 0, opacity: 1, duration: 0.4, stagger: 0.15, delay: 0.2 }
+            );
+        }
+    }
+
+    function renderCharts(c, d, days, currentSpend, ghostSpend, projectedSpend, buckets) {
+
+        // 1. Ghost & Runway Pacing Chart
+        if(pacingChart) pacingChart.destroy();
+        pacingChart = new Chart(document.getElementById('pacingChart'), {
+            type: 'line',
+            data: {
+                labels: days,
+                datasets: [
+                    {
+                        label: 'Current Month',
+                        data: currentSpend,
+                        borderColor: '#FF5252',
+                        backgroundColor: 'rgba(255, 82, 82, 0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0 // Hide dots for clean line
+                    },
+                    {
+                        label: 'Projected Runway',
+                        data: projectedSpend,
+                        borderColor: '#FF5252',
+                        borderDash: [5, 5], // Dotted line
+                        tension: 0.3,
+                        pointRadius: 0
+                    },
+                    {
+                        label: 'Last Month (Ghost)',
+                        data: ghostSpend,
+                        borderColor: '#555555',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 0
+                    }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: { x: { grid: { display: false }, ticks: {maxTicksLimit: 6} }, y: { grid: { color: '#222' } } },
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        // 2. Transaction Size Bar Chart
+        if(sizeChart) sizeChart.destroy();
+        sizeChart = new Chart(document.getElementById('sizeChart'), {
+            type: 'bar',
+            data: {
+                labels: ['< ₹100', '₹100-₹500', '₹500-₹1k', '₹1k-₹5k', '₹5k+'],
+                datasets: [{
+                    data: buckets,
+                    backgroundColor: '#BB86FC',
+                    borderRadius: 6
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { grid: { color: '#222' } } } }
+        });
+
+        // 3. Flow Donut Chart
+        if(flowChart) flowChart.destroy();
+        flowChart = new Chart(document.getElementById('flowChart'), {
+            type: 'doughnut',
+            data: {
+                labels: ['Income', 'Expenses'],
+                datasets: [{
+                    data: [c, d],
+                    backgroundColor: ['#4CAF50', '#FF5252'],
+                    borderWidth: 0,
+                    cutout: '75%'
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' } } }
+        });
+    }
+</script>
+</body>
+</html>

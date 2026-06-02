@@ -1,25 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/headerLayoutContainer"
     android:layout_width="match_parent"
-    android:layout_height="176dp"
-    android:background="#1E1E1E"
+    android:layout_height="200dp"
+    android:background="@drawable/bg_glass"
+    android:layout_margin="8dp"
     android:gravity="bottom"
     android:orientation="vertical"
-    android:padding="16dp"
-    android:theme="@style/ThemeOverlay.AppCompat.Dark">
+    android:padding="20dp"
+    android:clickable="true"
+    android:focusable="true"
+    android:foreground="?attr/selectableItemBackground">
 
     <TextView
+        android:id="@+id/textUserName"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Garnavya Rawal"
-        android:textColor="#FFFFFF"
-        android:textSize="20sp"
+        android:text="Tap to set name"
+        android:textColor="@color/colorTextPrimary"
+        android:textSize="22sp"
         android:textStyle="bold" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="FinTrack Local Vault"
-        android:textColor="#AAAAAA"
-        android:textSize="14sp" />
+        android:textColor="@color/colorPrimary"
+        android:textSize="14sp"
+        android:layout_marginTop="4dp"/>
 </LinearLayout>

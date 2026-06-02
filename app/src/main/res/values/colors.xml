@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
+    <color name="colorPrimary">#6200EE</color>
+    <color name="colorBackground">#F5F7FA</color>
+
+    <color name="colorGlassSurface">#B3FFFFFF</color>
+    <color name="colorGlassBorder">#FFFFFF</color>
+
+    <color name="colorTextPrimary">#1D1D1D</color>
+    <color name="colorTextSecondary">#757575</color>
+
+    <color name="colorCredit">#00C853</color>
+    <color name="colorDebit">#FF3D00</color>
 </resources>
