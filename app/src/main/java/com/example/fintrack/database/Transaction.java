@@ -1,21 +1,18 @@
 package com.example.fintrack.database;
 
 import androidx.room.Entity;
-import androidx.room.Index;
 import androidx.room.PrimaryKey;
 
-// The composite index guarantees we never save the exact same transaction twice
-@Entity(tableName = "transactions",
-        indices = {@Index(value = {"timestamp", "amount", "merchant"}, unique = true)})
+@Entity(tableName = "transactions")
 public class Transaction {
 
-    @PrimaryKey(autoGenerate = true)
-    public int id;
+    // CRUCIAL FIX to stop duplicates ---
+    @PrimaryKey
+    public long timestamp;
 
     public double amount;
     public String merchant;
-    public long timestamp;
-    public String type; // "debit" or "credit"
+    public String type;
 
     public Transaction(double amount, String merchant, long timestamp, String type) {
         this.amount = amount;

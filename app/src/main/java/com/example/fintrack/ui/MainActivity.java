@@ -1,119 +1,154 @@
 package com.example.fintrack.ui;
 
 import android.Manifest;
-import android.content.Intent;
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
-import android.provider.Settings;
+import android.text.InputType;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.TextView;
 import android.widget.Toast;
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.work.ExistingPeriodicWorkPolicy;
-import androidx.work.PeriodicWorkRequest;
-import androidx.work.WorkManager;
 import com.example.fintrack.R;
 import com.example.fintrack.database.AppDatabase;
 import com.example.fintrack.database.Transaction;
 import com.example.fintrack.parser.SmsParser;
 import com.example.fintrack.parser.SmsScanner;
-import com.example.fintrack.worker.BatchSyncWorker;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
 
     private TransactionAdapter adapter;
+    private SharedPreferences prefs;
+    private double currentComputedBalance = 0.0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 1. Load the Bank Dictionary
         SmsParser.loadHeaders(this);
+        prefs = getSharedPreferences("ClearSlatePrefs", Context.MODE_PRIVATE);
 
-        // 2. Set up the UI List
         RecyclerView recyclerView = findViewById(R.id.recyclerViewTransactions);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
         adapter = new TransactionAdapter();
         recyclerView.setAdapter(adapter);
 
-        // 3. Permissions & Syncing
-        if (!isNotificationServiceEnabled()) {
-            Toast.makeText(this, "Please grant Notification Access", Toast.LENGTH_LONG).show();
-            startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
-        }
+        // Bind Vault Text Button to Secure Modal Display
+        TextView btnShowBalance = findViewById(R.id.btnShowBalance);
+        btnShowBalance.setOnClickListener(v -> showBalanceVaultModal());
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_SMS}, 101);
         } else {
-            executeSmartSync(); // Auto-scan on boot
+            executeSmartSync();
         }
 
-        scheduleSyncWorker();
-
-        // 4. Button Logic
         Button fetchButton = findViewById(R.id.btnFetchDetails);
         fetchButton.setOnClickListener(v -> executeSmartSync());
+
+        recalculateLedgerBalance();
+    }
+
+    private void showBalanceVaultModal() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Secure Vault Status");
+
+        // Show current total formatted balance clearly inside message window
+        String balanceStr = String.format("Current Available Balance:\n\n₹ %,.2f", currentComputedBalance);
+        builder.setMessage(balanceStr);
+
+        builder.setPositiveButton("Close", (dialog, id) -> dialog.dismiss());
+
+        builder.setNeutralButton("Edit Balance", (dialog, id) -> {
+            dialog.dismiss();
+            showBalanceCalibrationDialog(); // Direct route to calibrate
+        });
+
+        builder.show();
+    }
+
+    private void showBalanceCalibrationDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Calibrate Base Balance");
+
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        input.setHint("Enter actual account statement balance");
+        builder.setView(input);
+
+        builder.setPositiveButton("Set", (dialog, id) -> {
+            String value = input.getText().toString();
+            if (!value.isEmpty()) {
+                float actualRealWorldBalance = Float.parseFloat(value);
+                new Thread(() -> {
+                    List<Transaction> allTxns = AppDatabase.getDatabase(this).transactionDao().getAllTransactions();
+                    double totalCredits = 0;
+                    double totalDebits = 0;
+                    for (Transaction t : allTxns) {
+                        if ("credit".equals(t.type)) totalCredits += t.amount;
+                        else totalDebits += t.amount;
+                    }
+                    float offset = actualRealWorldBalance - (float)(totalCredits - totalDebits);
+                    prefs.edit().putFloat("BALANCE_OFFSET", offset).apply();
+                    runOnUiThread(this::recalculateLedgerBalance);
+                }).start();
+            }
+        });
+        builder.setNegativeButton("Cancel", (dialog, id) -> dialog.cancel());
+        builder.show();
+    }
+
+    private void recalculateLedgerBalance() {
+        float offset = prefs.getFloat("BALANCE_OFFSET", 0.0f);
+        new Thread(() -> {
+            List<Transaction> allTxns = AppDatabase.getDatabase(this).transactionDao().getAllTransactions();
+            double totalCredits = 0;
+            double totalDebits = 0;
+            for (Transaction t : allTxns) {
+                if ("credit".equals(t.type)) totalCredits += t.amount;
+                else totalDebits += t.amount;
+            }
+            currentComputedBalance = offset + totalCredits - totalDebits;
+        }).start();
+    }
+
+    private void executeSmartSync() {
+        Toast.makeText(this, "Scanning for financial records...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            List<Transaction> discovered = SmsScanner.runAutoDiscovery(this);
+            runOnUiThread(() -> {
+                new Thread(() -> {
+                    AppDatabase db = AppDatabase.getDatabase(this);
+                    if (!discovered.isEmpty()) {
+                        for (Transaction t : discovered) {
+                            db.transactionDao().insertTransaction(t);
+                        }
+                    }
+                    List<Transaction> finalTxns = db.transactionDao().getAllTransactions();
+                    runOnUiThread(() -> {
+                        adapter.setTransactions(finalTxns);
+                        recalculateLedgerBalance();
+                    });
+                }).start();
+            });
+        }).start();
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == 101 && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             executeSmartSync();
         }
-    }
-
-    private boolean isNotificationServiceEnabled() {
-        String pkgName = getPackageName();
-        final String flat = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
-        return flat != null && flat.contains(pkgName);
-    }
-
-    private void scheduleSyncWorker() {
-        PeriodicWorkRequest syncRequest = new PeriodicWorkRequest.Builder(
-                BatchSyncWorker.class, 6, TimeUnit.HOURS).build();
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-                "FinanceSync", ExistingPeriodicWorkPolicy.KEEP, syncRequest);
-    }
-
-    // --- PURE AUTO-DISCOVERY ENGINE ---
-    private void executeSmartSync() {
-        Toast.makeText(this, "Scanning for financial records...", Toast.LENGTH_SHORT).show();
-
-        new Thread(() -> {
-            // Let the Scanner hunt for valid transactions automatically
-            List<Transaction> discovered = SmsScanner.runAutoDiscovery(this);
-
-            runOnUiThread(() -> {
-                if (discovered.size() > 0) {
-                    Toast.makeText(this, "Sync complete! Found " + discovered.size() + " records.", Toast.LENGTH_SHORT).show();
-
-                    // Save them to Room Database silently
-                    new Thread(() -> {
-                        AppDatabase db = AppDatabase.getDatabase(this);
-                        for (Transaction t : discovered) {
-                            db.transactionDao().insertTransaction(t);
-                        }
-                        // Refresh the UI from the database
-                        List<Transaction> finalTxns = db.transactionDao().getAllTransactions();
-                        runOnUiThread(() -> adapter.setTransactions(finalTxns));
-                    }).start();
-
-                } else {
-                    Toast.makeText(this, "No new records found.", Toast.LENGTH_SHORT).show();
-                    // Load whatever is already in the database
-                    new Thread(() -> {
-                        List<Transaction> finalTxns = AppDatabase.getDatabase(this).transactionDao().getAllTransactions();
-                        runOnUiThread(() -> adapter.setTransactions(finalTxns));
-                    }).start();
-                }
-            });
-        }).start();
     }
 }
